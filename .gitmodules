@@ -7,3 +7,6 @@
 [submodule "JUCE"]
 	path = JUCE
 	url = https://github.com/juce-framework/JUCE.git
+[submodule "SpectrexSDK"]
+	path = SpectrexSDK
+	url = https://github.com/koaladsp/SpectrexSDK.git

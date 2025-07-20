@@ -1,185 +1,111 @@
 #include "PluginProcessor.h"
 #include "PluginEditor.h"
 #include "juce_core/juce_core.h"
-#include "juce_core/system/juce_PlatformDefs.h"
-#include "juce_events/juce_events.h"
 #include "juce_graphics/juce_graphics.h"
-#include "juce_gui_basics/juce_gui_basics.h"
-#include "param_ids.hpp"
-#include "tooltips.hpp"
-#include "widget/channel_vocoder.hpp"
-#include "widget/ensemble.hpp"
-#include "widget/stft_vocoder.hpp"
+#include <cmath>
+#include <objidlbase.h>
 
+constexpr int kFps = 30;
 //==============================================================================
 AudioPluginAudioProcessorEditor::AudioPluginAudioProcessorEditor (AudioPluginAudioProcessor& p)
     : AudioProcessorEditor (&p), processorRef (p)
-    , tooltip_window_(this, 500)
-    , main_gain_(p.main_gain_)
-    , side_gain_(p.side_gain_)
-    , output_gain_(p.output_gain_)
-    , stft_vocoder_(p)
-    , burg_lpc_(p)
-    , rls_lpc_(p)
-    , channel_vocoder_(p)
-    , ensemble_(p)
 {
-    setLookAndFeel(&myLookAndFeel_);
-    tooltip_window_.setLookAndFeel(&myLookAndFeel_);
-    
-    auto& apvts = *p.value_tree_;
+    auto& apvts = *processorRef.value_tree_;
+    gradient_.addColour(0.0, juce::Colours::black);
+    gradient_.addColour(0.5, juce::Colours::purple);
+    gradient_.addColour(1.0, juce::Colours::yellow);
 
-    addAndMakeVisible(filter_);
-    em_pitch_.BindParameter(apvts, id::kEmphasisPitch);
-    addAndMakeVisible(em_pitch_);
-    em_gain_.BindParameter(apvts, id::kEmphasisGain);
-    addAndMakeVisible(em_gain_);
-    em_s_.BindParameter(apvts, id::kEmphasisS);
-    addAndMakeVisible(em_s_);
+    algrithm_.addItem("RFFT", 1);
+    algrithm_.addItem("RTTF2", 2);
+    addAndMakeVisible(algrithm_);
+    algrithm_attachment_ = std::make_unique<juce::ComboBoxParameterAttachment>(*apvts.getParameter("ALGRITHM"), algrithm_);
 
-    addAndMakeVisible(shifter_);
-    shift_enable_.BindParameter(apvts, id::kEnableShifter);
-    shift_enable_.onStateChange = [this] {
-        shift_pitch_.setEnabled(shift_enable_.getToggleState());
-    };
-    addAndMakeVisible(shift_enable_);
-    shift_pitch_.BindParameter(apvts, id::kShiftPitch);
-    shift_pitch_.setEnabled(shift_enable_.getToggleState());
-    addAndMakeVisible(shift_pitch_);
-
-    main_gain_.gain_slide_.BindParameter(apvts, id::kMainGain);
-    addAndMakeVisible(main_gain_);
-    side_gain_.gain_slide_.BindParameter(apvts, id::kSideGain);
-    addAndMakeVisible(side_gain_);
-    output_gain_.gain_slide_.BindParameter(apvts, id::kOutputgain);
-    addAndMakeVisible(output_gain_);
-    main_channel_selector_.BindParameter(apvts, id::kMainChannelConfig);
-    addAndMakeVisible(main_channel_selector_);
-    side_channel_selector_.BindParameter(apvts, id::kSideChannelConfig);
-    addAndMakeVisible(side_channel_selector_);
-
-    vocoder_type_.BindParam(apvts, id::kVocoderType);
-    vocoder_type_.combobox_.addListener(this);
-    addAndMakeVisible(vocoder_type_);
-
-    language_box_.addItem("English", 1);
-    language_box_.addItem(juce::String::fromUTF8("中文"), 2);
-    language_box_.setSelectedItemIndex(0);
-    language_box_.onChange = [this] {
-        switch (language_box_.getSelectedItemIndex()) {
-        case 0:
-            tooltip::tooltips.MakeEnglishTooltips();
-            break;
-        case 1:
-            tooltip::tooltips.MakeChineseTooltips();
-            break;
-        }
-    };
-    addAndMakeVisible(language_box_);
-
-    addChildComponent(stft_vocoder_);
-    addChildComponent(rls_lpc_);
-    addChildComponent(burg_lpc_);
-    addChildComponent(channel_vocoder_);
-    this->comboBoxChanged(&vocoder_type_.combobox_);
-
-    addAndMakeVisible(ensemble_);
-
-    setSize (550, 550);
-    startTimerHz(30);
-    tooltip::tooltips.AddListenerAndInvoke(this);
+    setSize(600, 300);
+    setResizable(true, true);
+    startTimerHz(kFps);
 }
 
 AudioPluginAudioProcessorEditor::~AudioPluginAudioProcessorEditor() {
+    algrithm_attachment_ = nullptr;
     stopTimer();
-    setLookAndFeel(nullptr);
-    tooltip_window_.setLookAndFeel(nullptr);
 }
 
 //==============================================================================
+static float FreqToPitch(float req) {
+    return 69.0f + 12.0f * std::log2(req / 440.0f);
+}
+
 void AudioPluginAudioProcessorEditor::paint (juce::Graphics& g) {
-    g.fillAll(findColour(juce::ResizableWindow::backgroundColourId));
+    auto b = getLocalBounds().toFloat();
+    b.removeFromBottom(algrithm_.getHeight());
+    g.drawImage(image_, b);
 }
 
-void AudioPluginAudioProcessorEditor::OnLanguageChanged(tooltip::Tooltips& tooltips) {
-    filter_.setText(tooltips.Label(id::kFilterTitle), juce::dontSendNotification);
-    main_channel_selector_.SetLabelName(tooltips.Label(id::kMainChannelConfig));
-    side_channel_selector_.SetLabelName(tooltips.Label(id::kSideChannelConfig));
-}
-
+constexpr int kTime = 1; // seconds
+constexpr int kTimeResolution = 8;
 void AudioPluginAudioProcessorEditor::resized() {
     auto b = getLocalBounds();
-    {
-        auto title_box = b.removeFromTop(20);
-        filter_.setBounds(title_box);
-        auto top = b.removeFromTop(100);
-        em_pitch_.setBounds(top.removeFromLeft(50));
-        em_gain_.setBounds(top.removeFromLeft(50));
-        em_s_.setBounds(top.removeFromLeft(50));
-        shift_pitch_.setBounds(top.removeFromLeft(50));
-        {
-            title_box.removeFromLeft(shift_pitch_.getX());
-            shift_enable_.setBounds(title_box.removeFromLeft(25));
-            shifter_.setBounds(title_box);
-            language_box_.setBounds(title_box.removeFromRight(100));
-        }
-        main_gain_.setBounds(top.removeFromLeft(50 + 20));
-        side_gain_.setBounds(top.removeFromLeft(50 + 20));
-        output_gain_.setBounds(top.removeFromLeft(50 + 40));
-        {
-            auto half_top = top.removeFromTop(top.getHeight() / 2);
-            main_channel_selector_.setBounds(half_top);
-            side_channel_selector_.setBounds(top);
-        }
-    }
-    {
-        vocoder_type_.setBounds(b.removeFromTop(30));
-    }
-    {
-        auto top = b.removeFromBottom(120);
-        ensemble_.setBounds(top);
-    }
-    {
-        burg_lpc_.setBounds(b);
-        rls_lpc_.setBounds(b);
-        stft_vocoder_.setBounds(b);
-        channel_vocoder_.setBounds(b);
-    }
+    auto bottom = b.removeFromBottom(20);
+    algrithm_.setBounds(bottom.removeFromLeft(100));
+    image_ = juce::Image{juce::Image::RGB, kTime * kFps * kTimeResolution, b.getHeight(), true};
 }
 
 void AudioPluginAudioProcessorEditor::timerCallback() {
-    if (current_vocoder_widget_ != nullptr) {
-        current_vocoder_widget_->repaint();
-    }
-    main_gain_.repaint();
-    side_gain_.repaint();
-    output_gain_.repaint();
-}
+    image_.moveImageSection(0, 0, kTimeResolution / 4, 0, image_.getWidth() - kTimeResolution / 4, image_.getHeight());
+    image_.clear({image_.getWidth() - kTimeResolution / 4, 0, kTimeResolution / 4, image_.getHeight()});
 
-void AudioPluginAudioProcessorEditor::comboBoxChanged(juce::ComboBox* comboBoxThatHasChanged) {
-    if (comboBoxThatHasChanged == &vocoder_type_.combobox_) {
-        if (current_vocoder_widget_ != nullptr) {
-            current_vocoder_widget_->setVisible(false);
+    static const float upper = FreqToPitch(20000.0f);
+    static const float bottom = FreqToPitch(20.0f);
+    constexpr float db_upper = 0.0f;
+    constexpr float db_bottom = -60.0f;
+    float fs = static_cast<float>(processorRef.getSampleRate());
+    int xindex_begin = image_.getWidth() - kTimeResolution;
+    int algrithm = algrithm_.getSelectedItemIndex();
+
+    if (algrithm == 1) {
+        auto& rfft = processorRef.rffter_.rfft2_;
+        int nbins = rfft.NumDataBins();
+        int fft_size = rfft.FFtSize();
+        for (int i = 0; i < nbins; ++i) {
+            float gain = rfft.CoreectGain(i);
+            float freq = rfft.CorrectFreqBin(i) * fs / fft_size;
+            if (freq < 20.0f || freq > 20000.0f) continue;
+            float pitch = FreqToPitch(freq);
+            int yindex = (int)juce::jmap<float>(pitch, bottom, upper, image_.getHeight() - 1.0f, 0.0f);
+            float time = rfft.CoreectTime(i) * 8.0f;
+            int xindex = (int)juce::jmap<float>(time, -0.5f, 0.5f, 0.0f, kTimeResolution - 1.0f);
+            float db = 20.0f * std::log10(gain + 1e-10f);
+            db = std::clamp(db, db_bottom, db_upper);
+            float db_norm = (db - db_bottom) / (db_upper - db_bottom);
+            auto color = gradient_.getColourAtPosition(db_norm);
+            auto color2 = image_.getPixelAt(xindex_begin + xindex, yindex);
+            if (color.getLightness() > color2.getLightness()) {
+                image_.setPixelAt(xindex_begin + xindex, yindex, color);
+            }
         }
-
-        switch (vocoder_type_.combobox_.getSelectedItemIndex()) {
-        case eVocoderType_ChannelVocoder:
-            current_vocoder_widget_ = &channel_vocoder_;
-            break;
-        case eVocoderType_STFTVocoder:
-            current_vocoder_widget_ = &stft_vocoder_;
-            break;
-        case eVocoderType_BurgLPC:
-            current_vocoder_widget_ = &burg_lpc_;
-            break;
-        case eVocoderType_RLSLPC:
-            current_vocoder_widget_ = &rls_lpc_;
-            break;
-        default:
-            jassertfalse;
-            break;
-        }
-
-        current_vocoder_widget_->setVisible(true);
     }
+    else if (algrithm == 0) {
+        auto& rfft = processorRef.rffter_.rfft_;
+        int nbins = rfft.NumDataBins();
+        int fft_size = rfft.FFtSize();
+        for (int i = 0; i < nbins; ++i) {
+            float gain = rfft.CoreectGain(i);
+            float freq = rfft.CorrectFreqBin(i) * fs / fft_size;
+            if (freq < 20.0f || freq > 20000.0f) continue;
+            float pitch = FreqToPitch(freq);
+            int yindex = (int)juce::jmap<float>(pitch, bottom, upper, image_.getHeight() - 1.0f, 0.0f);
+            float time = rfft.CoreectTime(i);
+            int xindex = (int)juce::jmap<float>(time, -0.5f, 0.5f, 0.0f, kTimeResolution - 1.0f);
+            float db = 20.0f * std::log10(gain + 1e-10f);
+            db = std::clamp(db, db_bottom, db_upper);
+            float db_norm = (db - db_bottom) / (db_upper - db_bottom);
+            auto color = gradient_.getColourAtPosition(db_norm);
+            auto color2 = image_.getPixelAt(xindex_begin + xindex, yindex);
+            if (color.getLightness() > color2.getLightness()) {
+                image_.setPixelAt(xindex_begin + xindex, yindex, color);
+            }
+        }
+    }
+
+    repaint();
 }

@@ -1,15 +1,8 @@
 #pragma once
 
+#include "rffter.hpp"
 #include <juce_audio_processors/juce_audio_processors.h>
 #include <vector>
-#include "dsp/filter.hpp"
-#include "dsp/burg_lpc.hpp"
-#include "dsp/pitch_shifter.hpp"
-#include "dsp/rls_lpc.hpp"
-#include "dsp/stft_vocoder.hpp"
-#include "dsp/gain.hpp"
-#include "dsp/ensemble.hpp"
-#include "dsp/channel_vocoder.hpp"
 
 //==============================================================================
 class AudioPluginAudioProcessor final : public juce::AudioProcessor
@@ -51,8 +44,6 @@ public:
     void getStateInformation (juce::MemoryBlock& destData) override;
     void setStateInformation (const void* data, int sizeInBytes) override;
 
-    void Panic();
-    void SetLatency();
     struct {
         struct FloatStore : public juce::AudioProcessorParameter::Listener {
             std::function<void(float)> func;
@@ -141,35 +132,10 @@ public:
         void Add(const std::unique_ptr<juce::AudioParameterChoice>& p, std::function<void(int)> func) {
             listeners.emplace_back(std::make_unique<ChoiceStore>(func, p.get()));
         }
-    } paramListeners_;
+    } param_callbacks_;
     std::unique_ptr<juce::AudioProcessorValueTreeState> value_tree_;
 
-    juce::AudioParameterFloat* filter_pitch_;
-    juce::AudioParameterFloat* filter_gain_;
-    juce::AudioParameterFloat* filter_s_;
-    juce::AudioParameterFloat* lpc_pitch_;
-    juce::AudioParameterFloat* lpc_detune_;
-    juce::AudioParameterBool* shifter_enabled_;
-    juce::AudioParameterInt* main_channel_config_;
-    juce::AudioParameterInt* side_channel_config_;
-
-    dsp::Filter filter_;
-    dsp::PitchShifter shifter_;
-    dsp::BurgLPC burg_lpc_;
-    dsp::RLSLPC rls_lpc_;
-    dsp::STFTVocoder stft_vocoder_;
-    dsp::ChannelVocoder channel_vocoder_;
-    dsp::Ensemble ensemble_;
-
-    dsp::Gain<1> main_gain_;
-    dsp::Gain<1> side_gain_;
-    dsp::Gain<2> output_gain_;
-
-    juce::AudioParameterChoice* vocoder_type_param_{};
-    int current_vocoder_type_ = 0;
-
-    std::vector<float> main_buffer_;
-    std::vector<float> side_buffer_;
+    RFFTer rffter_;
 private:
     //==============================================================================
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (AudioPluginAudioProcessor)
