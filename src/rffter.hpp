@@ -7,7 +7,8 @@
 class RFFTer {
 public:
     static constexpr int kFFTSize = 4096;
-    static constexpr int kHopSize = kFFTSize / 4;
+    static constexpr int kOverlay = 4;
+    static constexpr int kHopSize = kFFTSize / kOverlay;
     static constexpr int kNumBins = kFFTSize / 2 + 1;
 
     void Init();

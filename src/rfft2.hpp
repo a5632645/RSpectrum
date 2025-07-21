@@ -91,7 +91,7 @@ public:
         auto num = X_h.real() * X_Th.real() + X_h.imag() * X_Th.imag();
         auto magSquared = norm(X_h) + 1e-18f;
 
-        return num / magSquared / fft_size_;
+        return num * std::numbers::pi_v<float> * 2.0f / magSquared / fft_size_;
     }
 
     float CoreectGain(int i) const {

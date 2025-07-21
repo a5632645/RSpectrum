@@ -41,13 +41,13 @@ void AudioPluginAudioProcessorEditor::paint (juce::Graphics& g) {
     g.drawImage(image_, b);
 }
 
-constexpr int kTime = 1; // seconds
+constexpr int kTime = 3; // seconds
 constexpr int kTimeResolution = 8;
 void AudioPluginAudioProcessorEditor::resized() {
     auto b = getLocalBounds();
     auto bottom = b.removeFromBottom(20);
     algrithm_.setBounds(bottom.removeFromLeft(100));
-    image_ = juce::Image{juce::Image::RGB, kTime * kFps * kTimeResolution, b.getHeight(), true};
+    image_ = juce::Image{juce::Image::RGB, kTime * kFps * kTimeResolution / 4, b.getHeight(), true};
 }
 
 void AudioPluginAudioProcessorEditor::timerCallback() {
@@ -57,7 +57,7 @@ void AudioPluginAudioProcessorEditor::timerCallback() {
     static const float upper = FreqToPitch(20000.0f);
     static const float bottom = FreqToPitch(20.0f);
     constexpr float db_upper = 0.0f;
-    constexpr float db_bottom = -60.0f;
+    constexpr float db_bottom = -40.0f;
     float fs = static_cast<float>(processorRef.getSampleRate());
     int xindex_begin = image_.getWidth() - kTimeResolution;
     int algrithm = algrithm_.getSelectedItemIndex();
@@ -72,7 +72,7 @@ void AudioPluginAudioProcessorEditor::timerCallback() {
             if (freq < 20.0f || freq > 20000.0f) continue;
             float pitch = FreqToPitch(freq);
             int yindex = (int)juce::jmap<float>(pitch, bottom, upper, image_.getHeight() - 1.0f, 0.0f);
-            float time = rfft.CoreectTime(i) * 8.0f;
+            float time = rfft.CoreectTime(i);
             int xindex = (int)juce::jmap<float>(time, -0.5f, 0.5f, 0.0f, kTimeResolution - 1.0f);
             float db = 20.0f * std::log10(gain + 1e-10f);
             db = std::clamp(db, db_bottom, db_upper);
